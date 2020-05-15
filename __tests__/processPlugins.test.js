@@ -1,6 +1,8 @@
 import _ from 'lodash'
 import _postcss from 'postcss'
+import tailwind from '../src/index'
 import processPlugins from '../src/util/processPlugins'
+import createPlugin from '../src/util/createPlugin'
 
 function css(nodes) {
   return _postcss.root({ nodes }).toString()
@@ -47,7 +49,7 @@ test('plugins can create utilities with object syntax', () => {
         object-fit: cover
       }
     }
-    `)
+  `)
 })
 
 test('plugins can create utilities with arrays of objects', () => {
@@ -742,6 +744,62 @@ test('plugins apply all global variants when variants are configured globally', 
     `)
 })
 
+test('plugins can check if corePlugins are enabled', () => {
+  const { components, utilities } = processPlugins(
+    [
+      function({ addUtilities, corePlugins }) {
+        addUtilities({
+          '.test': {
+            'text-color': corePlugins('textColor') ? 'true' : 'false',
+            opacity: corePlugins('opacity') ? 'true' : 'false',
+          },
+        })
+      },
+    ],
+    makeConfig({
+      corePlugins: { textColor: false },
+    })
+  )
+
+  expect(components.length).toBe(0)
+  expect(css(utilities)).toMatchCss(`
+    @variants {
+      .test {
+        text-color: false;
+        opacity: true
+      }
+    }
+    `)
+})
+
+test('plugins can check if corePlugins are enabled when using array white-listing', () => {
+  const { components, utilities } = processPlugins(
+    [
+      function({ addUtilities, corePlugins }) {
+        addUtilities({
+          '.test': {
+            'text-color': corePlugins('textColor') ? 'true' : 'false',
+            opacity: corePlugins('opacity') ? 'true' : 'false',
+          },
+        })
+      },
+    ],
+    makeConfig({
+      corePlugins: ['textColor'],
+    })
+  )
+
+  expect(components.length).toBe(0)
+  expect(css(utilities)).toMatchCss(`
+    @variants {
+      .test {
+        text-color: true;
+        opacity: false
+      }
+    }
+    `)
+})
+
 test('plugins can provide fallbacks to keys missing from the config', () => {
   const { components, utilities } = processPlugins(
     [
@@ -900,6 +958,25 @@ test('when important is a selector it is used to scope utilities instead of addi
       }
     }
     `)
+})
+
+test('when important contains a class an error is thrown', () => {
+  expect(() => {
+    processPlugins(
+      [
+        function({ addUtilities }) {
+          addUtilities({
+            '.rotate-90': {
+              transform: 'rotate(90deg)',
+            },
+          })
+        },
+      ],
+      makeConfig({
+        important: '#app .project',
+      })
+    )
+  }).toThrow()
 })
 
 test('when important is a selector it scopes all selectors in a rule, even though defining utilities like this is stupid', () => {
@@ -1205,4 +1282,451 @@ test('prefix will prefix all classes in a selector', () => {
       background-color: blue
     }
     `)
+})
+
+test('plugins can be provided as an object with a handler function', () => {
+  const { components, utilities } = processPlugins(
+    [
+      {
+        handler({ addUtilities }) {
+          addUtilities({
+            '.object-fill': {
+              'object-fit': 'fill',
+            },
+            '.object-contain': {
+              'object-fit': 'contain',
+            },
+            '.object-cover': {
+              'object-fit': 'cover',
+            },
+          })
+        },
+      },
+    ],
+    makeConfig()
+  )
+
+  expect(components.length).toBe(0)
+  expect(css(utilities)).toMatchCss(`
+    @variants {
+      .object-fill {
+        object-fit: fill
+      }
+      .object-contain {
+        object-fit: contain
+      }
+      .object-cover {
+        object-fit: cover
+      }
+    }
+  `)
+})
+
+test('plugins can provide a config but no handler', () => {
+  const { components, utilities } = processPlugins(
+    [
+      {
+        config: {
+          prefix: 'tw-',
+        },
+      },
+      {
+        handler({ addUtilities }) {
+          addUtilities({
+            '.object-fill': {
+              'object-fit': 'fill',
+            },
+            '.object-contain': {
+              'object-fit': 'contain',
+            },
+            '.object-cover': {
+              'object-fit': 'cover',
+            },
+          })
+        },
+      },
+    ],
+    makeConfig()
+  )
+
+  expect(components.length).toBe(0)
+  expect(css(utilities)).toMatchCss(`
+    @variants {
+      .object-fill {
+        object-fit: fill
+      }
+      .object-contain {
+        object-fit: contain
+      }
+      .object-cover {
+        object-fit: cover
+      }
+    }
+  `)
+})
+
+test('plugins can be created using the `createPlugin` function', () => {
+  const plugin = createPlugin(
+    function({ addUtilities, theme, variants }) {
+      const utilities = _.fromPairs(
+        _.toPairs(theme('testPlugin')).map(([k, v]) => [`.test-${k}`, { testProperty: v }])
+      )
+
+      addUtilities(utilities, variants('testPlugin'))
+    },
+    {
+      theme: {
+        testPlugin: {
+          sm: '1rem',
+          md: '2rem',
+          lg: '3rem',
+        },
+      },
+      variants: {
+        testPlugin: ['responsive', 'hover'],
+      },
+    }
+  )
+
+  return _postcss([
+    tailwind({
+      corePlugins: [],
+      theme: {
+        screens: {
+          sm: '400px',
+        },
+      },
+      plugins: [plugin],
+    }),
+  ])
+    .process(
+      `
+        @tailwind base;
+        @tailwind components;
+        @tailwind utilities;
+      `,
+      { from: undefined }
+    )
+    .then(result => {
+      const expected = `
+        .test-sm {
+          test-property: 1rem
+        }
+        .test-md {
+          test-property: 2rem
+        }
+        .test-lg {
+          test-property: 3rem
+        }
+        .hover\\:test-sm:hover {
+          test-property: 1rem
+        }
+        .hover\\:test-md:hover {
+          test-property: 2rem
+        }
+        .hover\\:test-lg:hover {
+          test-property: 3rem
+        }
+
+        @media (min-width: 400px) {
+          .sm\\:test-sm {
+            test-property: 1rem
+          }
+          .sm\\:test-md {
+            test-property: 2rem
+          }
+          .sm\\:test-lg {
+            test-property: 3rem
+          }
+          .sm\\:hover\\:test-sm:hover {
+            test-property: 1rem
+          }
+          .sm\\:hover\\:test-md:hover {
+            test-property: 2rem
+          }
+          .sm\\:hover\\:test-lg:hover {
+            test-property: 3rem
+          }
+        }
+      `
+
+      expect(result.css).toMatchCss(expected)
+    })
+})
+
+test('plugins with extra options can be created using the `createPlugin.withOptions` function', () => {
+  const plugin = createPlugin.withOptions(
+    function({ className }) {
+      return function({ addUtilities, theme, variants }) {
+        const utilities = _.fromPairs(
+          _.toPairs(theme('testPlugin')).map(([k, v]) => [
+            `.${className}-${k}`,
+            { testProperty: v },
+          ])
+        )
+
+        addUtilities(utilities, variants('testPlugin'))
+      }
+    },
+    function() {
+      return {
+        theme: {
+          testPlugin: {
+            sm: '1rem',
+            md: '2rem',
+            lg: '3rem',
+          },
+        },
+        variants: {
+          testPlugin: ['responsive', 'hover'],
+        },
+      }
+    }
+  )
+
+  return _postcss([
+    tailwind({
+      corePlugins: [],
+      theme: {
+        screens: {
+          sm: '400px',
+        },
+      },
+      plugins: [plugin({ className: 'banana' })],
+    }),
+  ])
+    .process(
+      `
+        @tailwind base;
+        @tailwind components;
+        @tailwind utilities;
+      `,
+      { from: undefined }
+    )
+    .then(result => {
+      const expected = `
+        .banana-sm {
+          test-property: 1rem
+        }
+        .banana-md {
+          test-property: 2rem
+        }
+        .banana-lg {
+          test-property: 3rem
+        }
+        .hover\\:banana-sm:hover {
+          test-property: 1rem
+        }
+        .hover\\:banana-md:hover {
+          test-property: 2rem
+        }
+        .hover\\:banana-lg:hover {
+          test-property: 3rem
+        }
+
+        @media (min-width: 400px) {
+          .sm\\:banana-sm {
+            test-property: 1rem
+          }
+          .sm\\:banana-md {
+            test-property: 2rem
+          }
+          .sm\\:banana-lg {
+            test-property: 3rem
+          }
+          .sm\\:hover\\:banana-sm:hover {
+            test-property: 1rem
+          }
+          .sm\\:hover\\:banana-md:hover {
+            test-property: 2rem
+          }
+          .sm\\:hover\\:banana-lg:hover {
+            test-property: 3rem
+          }
+        }
+      `
+
+      expect(result.css).toMatchCss(expected)
+    })
+})
+
+test('plugins created using `createPlugin.withOptions` do not need to be invoked if the user wants to use the default options', () => {
+  const plugin = createPlugin.withOptions(
+    function({ className } = { className: 'banana' }) {
+      return function({ addUtilities, theme, variants }) {
+        const utilities = _.fromPairs(
+          _.toPairs(theme('testPlugin')).map(([k, v]) => [
+            `.${className}-${k}`,
+            { testProperty: v },
+          ])
+        )
+
+        addUtilities(utilities, variants('testPlugin'))
+      }
+    },
+    function() {
+      return {
+        theme: {
+          testPlugin: {
+            sm: '1rem',
+            md: '2rem',
+            lg: '3rem',
+          },
+        },
+        variants: {
+          testPlugin: ['responsive', 'hover'],
+        },
+      }
+    }
+  )
+
+  return _postcss([
+    tailwind({
+      corePlugins: [],
+      theme: {
+        screens: {
+          sm: '400px',
+        },
+      },
+      plugins: [plugin],
+    }),
+  ])
+    .process(
+      `
+        @tailwind base;
+        @tailwind components;
+        @tailwind utilities;
+      `,
+      { from: undefined }
+    )
+    .then(result => {
+      const expected = `
+        .banana-sm {
+          test-property: 1rem
+        }
+        .banana-md {
+          test-property: 2rem
+        }
+        .banana-lg {
+          test-property: 3rem
+        }
+        .hover\\:banana-sm:hover {
+          test-property: 1rem
+        }
+        .hover\\:banana-md:hover {
+          test-property: 2rem
+        }
+        .hover\\:banana-lg:hover {
+          test-property: 3rem
+        }
+
+        @media (min-width: 400px) {
+          .sm\\:banana-sm {
+            test-property: 1rem
+          }
+          .sm\\:banana-md {
+            test-property: 2rem
+          }
+          .sm\\:banana-lg {
+            test-property: 3rem
+          }
+          .sm\\:hover\\:banana-sm:hover {
+            test-property: 1rem
+          }
+          .sm\\:hover\\:banana-md:hover {
+            test-property: 2rem
+          }
+          .sm\\:hover\\:banana-lg:hover {
+            test-property: 3rem
+          }
+        }
+      `
+
+      expect(result.css).toMatchCss(expected)
+    })
+})
+
+test('the configFunction parameter is optional when using the `createPlugin.withOptions` function', () => {
+  const plugin = createPlugin.withOptions(function({ className }) {
+    return function({ addUtilities, theme, variants }) {
+      const utilities = _.fromPairs(
+        _.toPairs(theme('testPlugin')).map(([k, v]) => [`.${className}-${k}`, { testProperty: v }])
+      )
+
+      addUtilities(utilities, variants('testPlugin'))
+    }
+  })
+
+  return _postcss([
+    tailwind({
+      corePlugins: [],
+      theme: {
+        screens: {
+          sm: '400px',
+        },
+        testPlugin: {
+          sm: '1px',
+          md: '2px',
+          lg: '3px',
+        },
+      },
+      variants: {
+        testPlugin: ['responsive', 'focus'],
+      },
+      plugins: [plugin({ className: 'banana' })],
+    }),
+  ])
+    .process(
+      `
+        @tailwind base;
+        @tailwind components;
+        @tailwind utilities;
+      `,
+      { from: undefined }
+    )
+    .then(result => {
+      const expected = `
+        .banana-sm {
+          test-property: 1px
+        }
+        .banana-md {
+          test-property: 2px
+        }
+        .banana-lg {
+          test-property: 3px
+        }
+        .focus\\:banana-sm:focus {
+          test-property: 1px
+        }
+        .focus\\:banana-md:focus {
+          test-property: 2px
+        }
+        .focus\\:banana-lg:focus {
+          test-property: 3px
+        }
+
+        @media (min-width: 400px) {
+          .sm\\:banana-sm {
+            test-property: 1px
+          }
+          .sm\\:banana-md {
+            test-property: 2px
+          }
+          .sm\\:banana-lg {
+            test-property: 3px
+          }
+          .sm\\:focus\\:banana-sm:focus {
+            test-property: 1px
+          }
+          .sm\\:focus\\:banana-md:focus {
+            test-property: 2px
+          }
+          .sm\\:focus\\:banana-lg:focus {
+            test-property: 3px
+          }
+        }
+      `
+
+      expect(result.css).toMatchCss(expected)
+    })
 })

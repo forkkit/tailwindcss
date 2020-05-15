@@ -2,6 +2,7 @@ import _ from 'lodash'
 import postcss from 'postcss'
 import selectorParser from 'postcss-selector-parser'
 import generateVariantFunction from '../util/generateVariantFunction'
+import prefixSelector from '../util/prefixSelector'
 
 function generatePseudoClassVariant(pseudoClass, selectorPrefix = pseudoClass) {
   return generateVariantFunction(({ modifySelectors, separator }) => {
@@ -20,14 +21,30 @@ function ensureIncludesDefault(variants) {
   return variants.includes('default') ? variants : ['default', ...variants]
 }
 
-const defaultVariantGenerators = {
+const defaultVariantGenerators = config => ({
   default: generateVariantFunction(() => {}),
   'group-hover': generateVariantFunction(({ modifySelectors, separator }) => {
     return modifySelectors(({ selector }) => {
       return selectorParser(selectors => {
         selectors.walkClasses(sel => {
           sel.value = `group-hover${separator}${sel.value}`
-          sel.parent.insertBefore(sel, selectorParser().astSync('.group:hover '))
+          sel.parent.insertBefore(
+            sel,
+            selectorParser().astSync(prefixSelector(config.prefix, '.group:hover '))
+          )
+        })
+      }).processSync(selector)
+    })
+  }),
+  'group-focus': generateVariantFunction(({ modifySelectors, separator }) => {
+    return modifySelectors(({ selector }) => {
+      return selectorParser(selectors => {
+        selectors.walkClasses(sel => {
+          sel.value = `group-focus${separator}${sel.value}`
+          sel.parent.insertBefore(
+            sel,
+            selectorParser().astSync(prefixSelector(config.prefix, '.group:focus '))
+          )
         })
       }).processSync(selector)
     })
@@ -42,12 +59,12 @@ const defaultVariantGenerators = {
   last: generatePseudoClassVariant('last-child', 'last'),
   odd: generatePseudoClassVariant('nth-child(odd)', 'odd'),
   even: generatePseudoClassVariant('nth-child(even)', 'even'),
-}
+})
 
 export default function(config, { variantGenerators: pluginVariantGenerators }) {
   return function(css) {
     const variantGenerators = {
-      ...defaultVariantGenerators,
+      ...defaultVariantGenerators(config),
       ...pluginVariantGenerators,
     }
 
@@ -61,6 +78,11 @@ export default function(config, { variantGenerators: pluginVariantGenerators }) 
       }
 
       _.forEach(_.without(ensureIncludesDefault(variants), 'responsive'), variant => {
+        if (!variantGenerators[variant]) {
+          throw new Error(
+            `Your config mentions the "${variant}" variant, but "${variant}" doesn't appear to be a variant. Did you forget or misconfigure a plugin that supplies that variant?`
+          )
+        }
         variantGenerators[variant](atRule, config)
       })
 
